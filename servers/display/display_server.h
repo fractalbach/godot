@@ -134,6 +134,17 @@ public:
 	static inline DisplayServerEnums::RenderingDeviceCreationStatus supported_rendering_device = DisplayServerEnums::RenderingDeviceCreationStatus::UNKNOWN;
 	static bool is_rendering_device_supported();
 
+	/* OFFSCREEN */
+
+	// Set by `--offscreen`: the display server keeps its usual windows and rendering driver,
+	// but never makes them visible to the user, never takes focus and never touches the cursor.
+private:
+	static inline bool offscreen = false;
+
+public:
+	static void set_offscreen(bool p_enabled) { offscreen = p_enabled; }
+	static bool is_offscreen() { return offscreen; }
+
 	/* GLOBAL MENU */
 
 public:

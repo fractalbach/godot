@@ -244,6 +244,7 @@ static int init_screen = DisplayServerEnums::SCREEN_PRIMARY;
 static bool init_fullscreen = false;
 static bool init_maximized = false;
 static bool init_windowed = false;
+static bool init_offscreen = false;
 static bool init_always_on_top = false;
 static bool init_use_custom_pos = false;
 static bool init_use_custom_screen = false;
@@ -571,6 +572,8 @@ void Main::print_help(const char *p_binary) {
 	print_help_option("--text-driver <driver>", "Text driver (used for font rendering, bidirectional support and shaping).\n");
 	print_help_option("--tablet-driver <driver>", "Pen tablet input driver.\n");
 	print_help_option("--headless", "Enable headless mode (--display-driver headless --audio-driver Dummy). Useful for servers and with --script.\n");
+	print_help_option("--offscreen", "Keep the normal display and rendering drivers, but never show a window, take focus or move the cursor (implies --windowed). Rendering, viewport screenshots and --write-movie still work.\n");
+	print_help_option("", "Only implemented on Windows; elsewhere the window is shown as usual.\n");
 	print_help_option("--log-file <file>", "Write output/error log to the specified path instead of the default location defined by the project.\n");
 	print_help_option("", "<file> path should be absolute or relative to the project directory.\n");
 	print_help_option("--write-movie <file>", "Write a video to the specified path (usually with .avi or .png extension).\n");
@@ -1467,6 +1470,11 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 
 			audio_driver = NULL_AUDIO_DRIVER;
 			display_driver = NULL_DISPLAY_DRIVER;
+
+		} else if (arg == "--offscreen") { // Render normally, but never show a window.
+
+			init_offscreen = true;
+			init_windowed = true;
 
 		} else if (arg == "--embedded") { // Enable embedded mode.
 #ifdef MACOS_ENABLED
@@ -2767,6 +2775,16 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 				init_use_custom_screen = true;
 			}
 		}
+	}
+
+	if (init_offscreen) {
+		// Offscreen windows are always plain windowed ones of the requested size, so renders
+		// don't depend on the desktop's resolution, and they never activate.
+		window_mode = DisplayServerEnums::WINDOW_MODE_WINDOWED;
+		init_maximized = false;
+		init_fullscreen = false;
+		window_flags |= DisplayServerEnums::WINDOW_FLAG_NO_FOCUS_BIT;
+		DisplayServer::set_offscreen(true);
 	}
 
 	OS::get_singleton()->_allow_hidpi = GLOBAL_DEF("display/window/dpi/allow_hidpi", true);

@@ -92,6 +92,10 @@
 #define DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 19
 #endif
 
+#ifndef DWMWA_CLOAK
+#define DWMWA_CLOAK 13
+#endif
+
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
@@ -261,6 +265,11 @@ Vector2i DisplayServerWindows::_get_screen_expand_offset(int p_screen) const {
 }
 
 void DisplayServerWindows::_set_mouse_mode_impl(DisplayServerEnums::MouseMode p_mode) {
+	if (DisplayServer::is_offscreen()) {
+		// The mouse mode is still tracked, but the user's cursor is never hidden, clipped or captured.
+		return;
+	}
+
 	if (p_mode == DisplayServerEnums::MOUSE_MODE_HIDDEN || p_mode == DisplayServerEnums::MOUSE_MODE_CAPTURED || p_mode == DisplayServerEnums::MOUSE_MODE_CONFINED_HIDDEN) {
 		// Hide cursor before moving.
 		if (hCursor == nullptr) {
@@ -1082,7 +1091,7 @@ void DisplayServerWindows::warp_mouse(const Point2i &p_position) {
 	if (mouse_mode == DisplayServerEnums::MOUSE_MODE_CAPTURED) {
 		old_x = p_position.x;
 		old_y = p_position.y;
-	} else {
+	} else if (!DisplayServer::is_offscreen()) {
 		POINT p;
 		p.x = p_position.x;
 		p.y = p_position.y;
@@ -2031,7 +2040,10 @@ void DisplayServerWindows::show_window(DisplayServerEnums::WindowID p_id) {
 	}
 	wd.initialized = true;
 
-	if (wd.maximized) {
+	if (DisplayServer::is_offscreen()) {
+		// Cloaked (see `_create_window()`), so "shown" only as far as rendering is concerned.
+		ShowWindow(wd.hWnd, SW_SHOWNA);
+	} else if (wd.maximized) {
 		ShowWindow(wd.hWnd, SW_SHOWMAXIMIZED);
 		SetForegroundWindow(wd.hWnd); // Slightly higher priority.
 		SetFocus(wd.hWnd); // Set keyboard focus.
@@ -2714,6 +2726,12 @@ void DisplayServerWindows::_get_window_style(bool p_main_window, bool p_initiali
 	if (p_no_redirection_bitmap) {
 		r_style_ex |= WS_EX_NOREDIRECTIONBITMAP;
 	}
+
+	if (DisplayServer::is_offscreen() && !p_embed_child) {
+		// No taskbar button or Alt-Tab entry, and never activated.
+		r_style_ex &= ~WS_EX_APPWINDOW;
+		r_style_ex |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+	}
 }
 
 void DisplayServerWindows::_update_window_style(DisplayServerEnums::WindowID p_window, bool p_repaint) {
@@ -2773,6 +2791,13 @@ void DisplayServerWindows::window_set_mode(DisplayServerEnums::WindowMode p_mode
 
 	if (p_mode != DisplayServerEnums::WINDOW_MODE_WINDOWED && wd.parent_hwnd) {
 		print_line("Embedded window only supports Windowed mode.");
+		return;
+	}
+
+	if (DisplayServer::is_offscreen()) {
+		// Offscreen windows stay windowed at their size (ShowWindow() for any mode change
+		// would also activate the window).
+		print_verbose("Offscreen window only supports Windowed mode, ignoring window mode change.");
 		return;
 	}
 
@@ -3028,7 +3053,7 @@ void DisplayServerWindows::window_set_flag(DisplayServerEnums::WindowFlags p_fla
 			}
 		} break;
 		case DisplayServerEnums::WINDOW_FLAG_NO_FOCUS: {
-			wd.no_focus = p_enabled;
+			wd.no_focus = p_enabled || DisplayServer::is_offscreen();
 			_update_window_style(p_window);
 		} break;
 		case DisplayServerEnums::WINDOW_FLAG_MOUSE_PASSTHROUGH: {
@@ -3111,6 +3136,10 @@ void DisplayServerWindows::window_request_attention(DisplayServerEnums::WindowID
 
 	ERR_FAIL_COND(!windows.has(p_window));
 	const WindowData &wd = windows[p_window];
+
+	if (DisplayServer::is_offscreen()) {
+		return;
+	}
 
 	FLASHWINFO info;
 	info.cbSize = sizeof(FLASHWINFO);
@@ -7404,6 +7433,16 @@ Error DisplayServerWindows::_create_window(DisplayServerEnums::WindowID p_window
 		}
 
 		wd.parent_hwnd = p_parent_hwnd;
+
+		if (DisplayServer::is_offscreen() && !p_parent_hwnd) {
+			// DWM cloaking: the window keeps WS_VISIBLE, so the swap chain presents and the
+			// engine renders as usual, but it is never composited to the screen or hit-tested.
+			BOOL cloak = TRUE;
+			if (FAILED(DwmSetWindowAttribute(wd.hWnd, DWMWA_CLOAK, &cloak, sizeof(cloak)))) {
+				WARN_PRINT("Offscreen: failed to cloak the window, it may become visible.");
+			}
+			wd.no_focus = true;
+		}
 
 		if (has_winrt_queue) {
 			wd.wrt_wd = WinRTUtils::create_wd(wd.hWnd, callable_mp(this, &DisplayServerWindows::_winrt_adv_color_info_cb), wd.id);
